@@ -4,6 +4,7 @@ import subprocess
 import httpx
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters
+from telegram.request import HTTPXRequest
 from config import get_settings
 from db import init_db, get_user, create_user, set_sheet_id, complete_registration
 from ai_parser import classify_intent, parse_message, answer_query
@@ -127,7 +128,8 @@ def main():
     init_db()
     check_ollama()
     settings = get_settings()
-    app = Application.builder().token(settings["bot_token"]).build()
+    request = HTTPXRequest(connect_timeout=30, read_timeout=30)
+    app = Application.builder().token(settings["bot_token"]).request(request).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
 
