@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y curl && \
+RUN apt-get update && apt-get install -y curl zstd && \
     curl -fsSL https://ollama.com/install.sh | sh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
