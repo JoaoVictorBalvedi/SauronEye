@@ -1,0 +1,6 @@
+__pycache__/
+.opencode/
+.env
+opencode.json
+service_account.json
+users.db

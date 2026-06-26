@@ -1,0 +1,9 @@
+.env
+.env.example
+service_account.json
+users.db
+__pycache__/
+.git/
+.gitignore
+.opencode/
+opencode.json
