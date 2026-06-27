@@ -124,11 +124,27 @@ def check_ollama():
         print("Done.")
 
 
+def wait_for_telegram(token: str, max_retries: int = 5, delay: int = 10):
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = httpx.get(url, timeout=15)
+            if r.status_code == 200:
+                return
+            print(f"[{attempt}/{max_retries}] Telegram returned {r.status_code}. Retrying in {delay}s...")
+        except httpx.RequestError as e:
+            print(f"[{attempt}/{max_retries}] Telegram unreachable: {e}. Retrying in {delay}s...")
+        time.sleep(delay)
+    print("Could not reach Telegram API after all retries. Exiting.")
+    exit(1)
+
+
 def main():
     init_db()
     check_ollama()
     settings = get_settings()
-    request = HTTPXRequest(connect_timeout=30, read_timeout=30)
+    wait_for_telegram(settings["bot_token"])
+    request = HTTPXRequest(connect_timeout=60, read_timeout=60)
     app = Application.builder().token(settings["bot_token"]).request(request).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
