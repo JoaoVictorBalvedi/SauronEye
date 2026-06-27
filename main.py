@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, Request
 from telegram import Bot, Update
+from telegram.request import HTTPXRequest
 
 from config import get_settings
 from db import init_db, get_user, create_user, set_sheet_id, complete_registration
@@ -141,7 +142,18 @@ async def lifespan(app: FastAPI):
     check_ollama()
 
     settings = get_settings()
-    bot = Bot(token=settings["bot_token"], base_url=settings["telegram_api_url"])
+    request = HTTPXRequest(
+        connect_timeout=30,
+        read_timeout=30,
+        write_timeout=30,
+        pool_timeout=30,
+    )
+
+    bot = Bot(
+        token=settings["bot_token"],
+        base_url=settings["telegram_api_url"],
+        request=request,
+    )
 
     logger.info("Bot ready. Webhook endpoint at /webhook")
     yield
@@ -160,7 +172,7 @@ async def webhook(request: Request):
         update = Update.de_json(data, bot)
         await handle_message(update)
     except Exception as e:
-        logger.error("Webhook error: %s", e)
+        logger.exception("Webhook error")
     return {"ok": True}
 
 
