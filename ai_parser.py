@@ -35,7 +35,7 @@ Exemplos de "query" (pergunta/consulta):
 - "total gasto na categoria casa"
 - "como estão minhas finanças?"
 
-Responda APENAS com {"intent": "record"} ou {"intent": "query"}.
+Responda APENAS com {{"intent": "record"}} ou {{"intent": "query"}}.
 
 Mensagem: {text}"""
 
