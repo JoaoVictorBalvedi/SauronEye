@@ -164,6 +164,7 @@ async def webhook(request: Request):
     return {"ok": True}
 
 
+@app.get("/")
 @app.get("/health")
 async def health():
     return {"status": "ok"}
