@@ -7,9 +7,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters
-from telegram.request import HTTPXRequest
+from telegram import Bot, Update
 
 from config import get_settings
 from db import init_db, get_user, create_user, set_sheet_id, complete_registration
@@ -24,10 +22,10 @@ SHEET_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{40,50}$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _limiter = RateLimiter()
 
-bot_app: Application | None = None
+bot: Bot | None = None
 
 
-async def handle_message(update: Update, _):
+async def handle_message(update: Update):
     chat_id = str(update.effective_chat.id)
     text = update.message.text.strip()
 
@@ -135,74 +133,20 @@ def check_ollama():
         logger.info("Done.")
 
 
-def get_webhook_url() -> str:
-    custom = os.environ.get("WEBHOOK_URL")
-    if custom:
-        return custom
-    space_id = os.environ.get("SPACE_ID")
-    if space_id:
-        host = space_id.replace("/", "-")
-        return f"https://{host}.hf.space/webhook"
-    logger.warning("No WEBHOOK_URL or SPACE_ID set; webhook will not work")
-    return "http://localhost:7860/webhook"
-
-
-def wait_for_telegram(token: str, api_url: str, proxy_url: str | None = None, max_retries: int = 5, delay: int = 10):
-    url = f"{api_url}{token}/getMe"
-    client_args: dict = {"timeout": 15}
-    if proxy_url:
-        client_args["proxy"] = proxy_url
-    for attempt in range(1, max_retries + 1):
-        try:
-            r = httpx.get(url, **client_args)
-            if r.status_code == 200:
-                return
-            logger.warning("[%d/%d] Telegram returned %s. Retrying in %ds...", attempt, max_retries, r.status_code, delay)
-        except httpx.RequestError as e:
-            logger.warning("[%d/%d] Telegram unreachable: %s. Retrying in %ds...", attempt, max_retries, e, delay)
-        time.sleep(delay)
-    logger.error("Could not reach Telegram API after all retries.")
-    exit(1)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bot_app
+    global bot
 
     init_db()
     check_ollama()
 
     settings = get_settings()
-    webhook_url = get_webhook_url()
+    bot = Bot(token=settings["bot_token"], base_url=settings["telegram_api_url"])
 
-    wait_for_telegram(
-        settings["bot_token"],
-        settings["telegram_api_url"],
-        settings["telegram_proxy_url"],
-    )
-
-    request = HTTPXRequest(connect_timeout=60, read_timeout=60, proxy_url=settings["telegram_proxy_url"])
-    bot_app = (
-        Application.builder()
-        .token(settings["bot_token"])
-        .base_url(settings["telegram_api_url"])
-        .request(request)
-        .build()
-    )
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    await bot_app.initialize()
-    await bot_app.start()
-
-    await bot_app.bot.set_webhook(url=webhook_url)
-    logger.info("Webhook set to %s", webhook_url)
-
+    logger.info("Bot ready. Webhook endpoint at /webhook")
     yield
 
-    await bot_app.bot.delete_webhook()
-    await bot_app.stop()
-    await bot_app.shutdown()
-    logger.info("Bot stopped")
+    logger.info("Shutting down.")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -210,11 +154,11 @@ app = FastAPI(lifespan=lifespan)
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    global bot_app
+    global bot
     try:
         data = await request.json()
-        update = Update.de_json(data, bot_app.bot)
-        await bot_app.process_update(update)
+        update = Update.de_json(data, bot)
+        await handle_message(update)
     except Exception as e:
         logger.error("Webhook error: %s", e)
     return {"ok": True}
