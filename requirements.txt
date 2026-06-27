@@ -3,3 +3,5 @@ gspread
 google-auth
 httpx
 python-dotenv
+fastapi
+uvicorn[standard]

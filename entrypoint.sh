@@ -14,4 +14,4 @@ done
 MODEL="${LLM_MODEL:-llama3.2}"
 ollama pull "$MODEL"
 
-exec python main.py
+exec uvicorn main:app --host 0.0.0.0 --port 7860
