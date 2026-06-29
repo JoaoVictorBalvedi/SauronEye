@@ -4,3 +4,4 @@ __pycache__/
 opencode.json
 service_account.json
 users.db
+AGENTS.MD

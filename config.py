@@ -1,4 +1,3 @@
-import json
 import os
 from dotenv import load_dotenv
 from functools import lru_cache

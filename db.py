@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import os
 
@@ -18,9 +19,14 @@ def init_db():
             "  sheet_id TEXT,"
             "  email TEXT,"
             "  reg_state TEXT DEFAULT 'awaiting_sheet',"
+            "  sheet_headers TEXT,"
             "  created_at TEXT DEFAULT (datetime('now'))"
             ")"
         )
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN sheet_headers TEXT")
+        except sqlite3.OperationalError:
+            pass
 
 
 def get_user(chat_id: str) -> dict | None:
@@ -42,6 +48,14 @@ def set_sheet_id(chat_id: str, sheet_id: str):
         conn.execute(
             "UPDATE users SET sheet_id = ?, reg_state = 'awaiting_email' WHERE chat_id = ?",
             (sheet_id, chat_id),
+        )
+
+
+def set_sheet_headers(chat_id: str, headers: list[str]):
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE users SET sheet_headers = ? WHERE chat_id = ?",
+            (json.dumps(headers), chat_id),
         )
 
 

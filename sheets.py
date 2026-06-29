@@ -1,10 +1,12 @@
 import json
-from datetime import date
+from functools import lru_cache
+
 import gspread
 from google.oauth2.service_account import Credentials
 from config import get_settings
 
 
+@lru_cache
 def _get_credentials():
     settings = get_settings()
     content = settings["service_account_content"]
@@ -19,29 +21,29 @@ def _get_credentials():
     )
 
 
+@lru_cache
 def _get_client():
     return gspread.authorize(_get_credentials())
 
 
-HEADERS = ["Nome", "Valor", "Data", "Categoria", "Quem fez a compra", "Forma de Pagamento", "Observações"]
+def read_headers(sheet_id: str) -> list[str]:
+    client = _get_client()
+    sheet = client.open_by_key(sheet_id).sheet1
+    return sheet.row_values(1)
 
 
-def append_transaction(sheet_id: str, transaction: dict):
+def append_transaction(sheet_id: str, transaction: dict, headers: list[str]):
     client = _get_client()
     sheet = client.open_by_key(sheet_id).sheet1
 
-    if sheet.row_values(1) != HEADERS:
-        sheet.insert_row(HEADERS, 1)
+    if sheet.row_values(1) != headers:
+        sheet.insert_row(headers, 1)
 
-    sheet.append_row([
-        transaction.get("nome", ""),
-        transaction.get("valor", 0),
-        transaction.get("data", str(date.today())),
-        transaction.get("categoria", ""),
-        transaction.get("quem_fez", ""),
-        transaction.get("forma_pagamento", ""),
-        transaction.get("observacoes", ""),
-    ])
+    row = []
+    for h in headers:
+        val = transaction.get(h)
+        row.append(val if val is not None else "")
+    sheet.append_row(row)
 
 
 def read_transactions(sheet_id: str) -> str:
