@@ -4,8 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import BackgroundTasks, FastAPI, Request
 
 from config import get_settings
 from db import init_db
@@ -14,6 +13,9 @@ from ai_parser import close_llm
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_proxy = get_settings()["telegram_proxy_url"]
+_telegram_client = httpx.AsyncClient(timeout=httpx.Timeout(15), proxy=_proxy)
 
 
 def check_ollama():
@@ -59,32 +61,44 @@ async def lifespan(app: FastAPI):
     logger.info("Bot ready. Webhook endpoint at /webhook")
     yield
     await close_llm()
+    await _telegram_client.aclose()
     logger.info("Shutting down.")
 
 
 app = FastAPI(lifespan=lifespan)
 
 
+async def _process_and_reply(chat_id: str, text: str):
+    try:
+        reply = await handle_message(chat_id, text)
+    except Exception:
+        logger.exception("Handler error")
+        reply = "Erro interno. Tente novamente."
+
+    settings = get_settings()
+    url = f"{settings['telegram_api_url']}{settings['bot_token']}/sendMessage"
+    try:
+        await _telegram_client.post(url, json={"chat_id": chat_id, "text": reply})
+    except httpx.HTTPError:
+        logger.exception("Failed to send Telegram reply")
+
+
 @app.post("/webhook")
-async def webhook(request: Request):
+async def webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         data = await request.json()
-        logger.info("Webhook received: %s", data)
 
         chat_id, text = extract_message(data)
 
         if not chat_id or not text:
             return {"ok": True}
 
-        reply = await handle_message(chat_id, text)
-
-        return JSONResponse(
-            {
-                "method": "sendMessage",
-                "chat_id": chat_id,
-                "text": reply,
-            }
-        )
+        # Ack Telegram immediately. Processing (LLM + Sheets calls) can take
+        # well over Telegram's webhook response window on slow hardware; if we
+        # don't reply fast, Telegram retries the same update and re-runs the
+        # whole expensive pipeline again, multiplying latency.
+        background_tasks.add_task(_process_and_reply, chat_id, text)
+        return {"ok": True}
 
     except Exception:
         logger.exception("Webhook error")

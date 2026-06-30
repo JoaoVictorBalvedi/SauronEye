@@ -5,21 +5,26 @@ import httpx
 from config import get_settings
 
 _MAX_TEXT_LENGTH = 500
-_MAX_SHEET_ROWS = 30
 
-_client = httpx.AsyncClient(timeout=httpx.Timeout(60))
+_client = httpx.AsyncClient(timeout=httpx.Timeout(120))
 
 
 async def close_llm():
     await _client.aclose()
 
 
-async def _llm(prompt: str, json_mode: bool = False) -> str:
+async def _llm(prompt: str, json_mode: bool = False, max_tokens: int = 250) -> str:
     settings = get_settings()
     body = {
         "model": settings["llm_model"],
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
+        # Keep the model resident between requests so we don't pay Ollama's
+        # load time on every message.
+        "keep_alive": "30m",
+        # Bounds worst-case generation time on slow (CPU-only) hosts; these
+        # responses are always short (a JSON object or a brief answer).
+        "options": {"num_predict": max_tokens},
     }
     if json_mode:
         body["format"] = "json"
@@ -59,52 +64,41 @@ _COLUMN_HINTS: dict[str, str] = {
 _DEFAULT_COLUMN_HINT = "extraia o valor correspondente ou null se não houver informação na mensagem"
 
 
-def _build_record_prompt(text: str, headers: list[str], today: str) -> str:
+_QUERY_STARTERS = (
+    "quanto", "quanta", "quantos", "quantas", "qual", "quais", "como",
+    "resumo", "resuma", "total", "totais", "média", "media", "balanço",
+    "balanco", "saldo",
+)
+
+
+def _build_combined_prompt(text: str, headers: list[str], today: str) -> str:
     cols = "\n".join(
         f'- "{h}": {_COLUMN_HINTS.get(h.lower().strip(), _DEFAULT_COLUMN_HINT)}'
         for h in headers
     )
     return (
-        f"Extraia os dados financeiros desta mensagem e retorne SOMENTE JSON.\n"
+        "Analise a mensagem de um app de finanças pessoais e responda SOMENTE com JSON.\n"
         f"Data de hoje: {today}\n"
-        f"\n"
+        "\n"
+        "Primeiro decida a intenção:\n"
+        '- "record" = registrar um gasto, receita ou transação financeira.\n'
+        '- "query" = perguntar sobre gastos, pedir resumo, análise ou consulta.\n'
+        "\n"
         f"A planilha do usuário tem estes cabeçalhos: {headers}\n"
-        f"\n"
-        f"Instruções para cada coluna:\n"
+        "Instruções para cada coluna (usadas SOMENTE se a intenção for \"record\"):\n"
         f"{cols}\n"
-        f"\n"
-        f"As chaves do JSON devem ser EXATAMENTE os nomes das colunas acima.\n"
-        f"\n"
-        f"IMPORTANTE:\n"
-        f"- Para colunas de DATA, use {today} se não mencionado na mensagem.\n"
-        f"- NÃO invente dados. Use null para o que não foi informado.\n"
-        f"\n"
+        "\n"
+        'Retorne SOMENTE um JSON no formato: {"intent": "record" ou "query", "data": {...} ou null}\n'
+        "\n"
+        "IMPORTANTE:\n"
+        '- Se intent for "record", "data" deve ter chaves EXATAMENTE iguais aos cabeçalhos '
+        f"acima. Para colunas de DATA use {today} se não mencionado. NÃO invente dados, "
+        "use null para o que não foi informado.\n"
+        '- Se intent for "query", "data" deve ser null.\n'
+        "\n"
         f"Mensagem: {text}"
     )
 
-
-CLASSIFY_PROMPT = """Classifique a intenção da mensagem como "record" ou "query".
-
-"record" = registrar um gasto, receita ou transação financeira.
-"query" = perguntar sobre gastos, pedir resumo, análise ou consulta.
-
-Exemplos de "record":
-- "comprei pão por 5 reais"
-- "gasolina 50 reais no posto"
-- "recebi 3000 de salário"
-- "ifood 25 reais no débito"
-- "paguei a conta de luz 180"
-
-Exemplos de "query":
-- "quanto gastei esse mês?"
-- "resumo dos gastos"
-- "quanto foi de combustível em maio?"
-- "total gasto na categoria casa"
-- "como estão minhas finanças?"
-
-Responda APENAS com {"intent": "record"} ou {"intent": "query"}.
-
-Mensagem: {text}"""
 
 QUERY_PROMPT = """Você é um assistente de finanças pessoais.
 
@@ -117,8 +111,13 @@ Planilha:
 
 Pergunta: {text}"""
 
+
 def _fast_classify(text: str) -> str | None:
-    if text.strip().endswith("?"):
+    stripped = text.strip()
+    if stripped.endswith("?"):
+        return "query"
+    first_word = stripped.split(" ", 1)[0].lower().strip("?!.,") if stripped else ""
+    if first_word in _QUERY_STARTERS:
         return "query"
     return None
 
@@ -129,38 +128,27 @@ def _truncate(text: str, max_len: int = _MAX_TEXT_LENGTH) -> str:
     return text[:max_len] + "..."
 
 
-def _limit_rows(data: str, max_rows: int = _MAX_SHEET_ROWS) -> str:
-    lines = data.strip().split("\n")
-    if len(lines) <= max_rows + 1:
-        return data
-    header = lines[0]
-    body = lines[1:]
-    return header + "\n" + "\n".join(body[-max_rows:])
-
-
-async def classify_intent(text: str) -> str:
+async def classify_and_parse(text: str, headers: list[str]) -> tuple[str, dict]:
+    """Classify intent and, for records, extract fields in a single LLM call."""
     fast = _fast_classify(text)
-    if fast:
-        return fast
+    if fast == "query":
+        return "query", {}
 
-    raw = await _llm(CLASSIFY_PROMPT.format(text=_truncate(text)), json_mode=True)
-    try:
-        result = json.loads(raw).get("intent", "")
-        if result in ("record", "query"):
-            return result
-    except json.JSONDecodeError:
-        pass
-    return "record"
-
-
-async def parse_message(text: str, headers: list[str]) -> dict:
     today = date.today().isoformat()
-    prompt = _build_record_prompt(_truncate(text), headers, today)
-    raw = await _llm(prompt, json_mode=True)
-    return json.loads(raw)
+    prompt = _build_combined_prompt(_truncate(text), headers, today)
+    raw = await _llm(prompt, json_mode=True, max_tokens=250)
+    result = json.loads(raw)
+
+    intent = result.get("intent")
+    if intent not in ("record", "query"):
+        intent = "record"
+
+    data = result.get("data") if intent == "record" else {}
+    return intent, data if isinstance(data, dict) else {}
 
 
 async def answer_query(text: str, sheet_data: str) -> str:
     return await _llm(
-        QUERY_PROMPT.format(sheet_data=_limit_rows(sheet_data), text=_truncate(text))
+        QUERY_PROMPT.format(sheet_data=sheet_data, text=_truncate(text)),
+        max_tokens=400,
     )

@@ -1,10 +1,11 @@
+import asyncio
 import json
 import re
 import logging
 
 from config import get_settings
 from db import get_user, create_user, set_sheet_id, set_sheet_headers, complete_registration
-from ai_parser import classify_intent, parse_message, answer_query
+from ai_parser import classify_and_parse, answer_query
 from sheets import read_headers, append_transaction, read_transactions
 from ratelimit import RateLimiter
 
@@ -57,7 +58,7 @@ async def handle_message(chat_id: str, text: str) -> str:
                 f"Compartilhe a planilha com {sa_email} como Editor e me envie o ID!"
             )
         try:
-            headers = read_headers(text)
+            headers = await asyncio.to_thread(read_headers, text)
         except Exception:
             logger.exception("Failed to read sheet headers")
             return (
@@ -96,19 +97,20 @@ async def handle_message(chat_id: str, text: str) -> str:
         headers = user.get("sheet_headers")
 
         if not headers:
-            headers = read_headers(user["sheet_id"])
+            headers = await asyncio.to_thread(read_headers, user["sheet_id"])
             set_sheet_headers(chat_id, headers)
         elif isinstance(headers, str):
             headers = json.loads(headers)
 
-        intent = await classify_intent(text)
+        intent, transaction = await classify_and_parse(text, headers)
 
         if intent == "record":
-            transaction = await parse_message(text, headers)
-            append_transaction(user["sheet_id"], transaction, headers)
+            await asyncio.to_thread(
+                append_transaction, user["sheet_id"], transaction, headers
+            )
             return "Registrado! ✅"
 
-        sheet_data = read_transactions(user["sheet_id"])
+        sheet_data = await asyncio.to_thread(read_transactions, user["sheet_id"])
         return await answer_query(text, sheet_data)
 
     except Exception:

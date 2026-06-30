@@ -13,7 +13,7 @@ def get_settings():
     telegram_proxy_url = os.environ.get("TELEGRAM_PROXY_URL") or os.environ.get("HTTPS_PROXY")
     return {
         "bot_token": os.environ["BOT_TOKEN"],
-        "telegram_api_url": telegram_api_url.rstrip("/") + "/",
+        "telegram_api_url": telegram_api_url.rstrip("/"),
         "telegram_proxy_url": telegram_proxy_url,
         "ollama_url": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
         "llm_model": os.environ.get("LLM_MODEL", "llama3.2"),

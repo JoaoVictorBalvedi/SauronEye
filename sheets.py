@@ -36,9 +36,8 @@ def append_transaction(sheet_id: str, transaction: dict, headers: list[str]):
     client = _get_client()
     sheet = client.open_by_key(sheet_id).sheet1
 
-    if sheet.row_values(1) != headers:
-        sheet.insert_row(headers, 1)
-
+    # Headers are cached at registration time (db.sheet_headers) and trusted
+    # here, skipping a verification read on every single write.
     row = []
     for h in headers:
         val = transaction.get(h)
@@ -46,17 +45,27 @@ def append_transaction(sheet_id: str, transaction: dict, headers: list[str]):
     sheet.append_row(row)
 
 
-def read_transactions(sheet_id: str) -> str:
+_MAX_QUERY_ROWS = 40
+
+
+def read_transactions(sheet_id: str, max_rows: int = _MAX_QUERY_ROWS) -> str:
     client = _get_client()
     sheet = client.open_by_key(sheet_id).sheet1
-    rows = sheet.get_all_values()
-    if not rows:
+
+    # Only column A is read to find the last populated row, instead of
+    # pulling the entire sheet history just to look at the last few rows.
+    last_row = len(sheet.col_values(1))
+    if last_row <= 1:
         return "Nenhuma transação encontrada."
-    data = rows[1:]
-    if not data:
+
+    start = max(2, last_row - max_rows + 1)
+    header_grid, data_grid = sheet.batch_get(["A1:Z1", f"A{start}:Z{last_row}"])
+    if not header_grid or not header_grid[0]:
         return "Nenhuma transação encontrada."
-    lines = [" | ".join(rows[0])]
+
+    lines = [" | ".join(header_grid[0])]
     lines.append("-" * 60)
-    for row in data:
-        lines.append(" | ".join(row))
+    for row in data_grid:
+        if any(cell.strip() for cell in row):
+            lines.append(" | ".join(row))
     return "\n".join(lines)
